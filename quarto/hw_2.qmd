@@ -1,0 +1,138 @@
+---
+title: "Homework 2"
+author: "Sam Kuhn"
+date: "11/28/22"
+execute:
+  cache: true
+format: 
+  pdf:
+    documentclass: report
+    toc: true
+    fig-width: 7
+    fig-height: 5
+    page-layout: full
+    geometry:
+      - top=30mm
+      - left=20mm
+      - heightrounded
+---
+
+{{< pagebreak >}}
+
+# Objective
+
+In this homework assignment, you will explore, analyze and model a data set containing approximately 8000 records representing a customer at an auto insurance company. Each record has two response variables. The first response variable, TARGET_FLAG, is a 1 or a 0. A “1” means that the person was in a car crash. A zero means that the person was not in a car crash. The second response variable is TARGET_AMT. This value is zero if the person did not crash their car. But if they did crash their car, this number will be a value greater than zero.
+
+
+Your objective is to build multiple linear regression and binary logistic regression models on the training data to predict the probability that a person will crash their car and also the amount of money it will cost if the person does crash their car. You can only use the variables given to you (or variables that you derive from the variables provided). 
+
+# Data Exploration
+
+## Load data
+
+```{r}
+#| warning: false
+#| output: false
+# Install pacman package and load libraries
+# install.packages("pacman")
+pacman::p_load(tidyverse, here, tidymodels, corrplot, MASS, gt, stargazer)
+
+# Makes sure dplyr::filter and dplyr::select will be used
+conflicted::conflict_prefer("select", "dplyr")
+conflicted::conflict_prefer("filter", "dplyr")
+
+# Load training set from data folder and clean variable names
+training_set <- readr::read_csv(
+  here::here("data", "insurance_training_data.csv")
+) |>
+  janitor::clean_names()
+```
+
+First, lets rename the variables to a more readable format. Then, print a summary of the data to get a sense of what datatypes there are. From the table below, we can see we have a few variables where the datatype is wrong. In particular, `Income`, `Bluebook Value`, and `Total Claims` are all character columns rather than numeric. We will convert them. Furthermore, let's convert any binary variables to factors for modelling purposes. 
+
+```{r}
+#| echo: false
+training_set <- training_set |>
+  rename(
+    `Crash Dummy` = target_flag,
+    `Crash Damage` = target_amt,
+    `Age of Driver` = age,
+    `Bluebook Value` = bluebook,
+    `Car Age` = car_age,
+    `Car Type` = car_type,
+    `Claim Frequency` = clm_freq,
+    `Education` = education,
+    `Kids at Home` = homekids,
+    `Home Value` = home_val,
+    `Income` = income,
+    `Job` = job,
+    `Teen Drivers` = kidsdriv,
+    `Marital Status` = mstatus,
+    `Licences Record Points` = mvr_pts,
+    `Total Claims` = oldclaim,
+    `Single Parent` = parent1,
+    `Is Red Car` = red_car,
+    `License Revoked` = revoked,
+    `Sex` = sex,
+    `Time as Customer` = tif,
+    `Distance to Work` = travtime,
+    `Geography` = urbanicity,
+    `Years on Job` = yoj
+  )
+
+training_set |>
+  glimpse()
+```
+
+```{r}
+training_set <- training_set |> 
+  mutate(
+    across(
+      .cols = c(`Income`, `Home Value`, `Bluebook Value`, `Total Claims`),
+      .fns = parse_number
+    )
+  )
+
+training_set <- training_set |> 
+  mutate(
+    across(
+      .cols = c(`Is Red Car`, `Crash Dummy`, `Marital Status`, "Sex"),
+      .fns = as.factor
+    )
+  )
+```
+
+
+{{< pagebreak >}}
+
+## Check for missing values
+
+To check for NA values, we are going to take the sum of every value matching `NA` across the entire data-frame and print the results. Then, replace all the `NA` values with the median value of the corresponding variable. The variables with the most `NA` observations are: `team_batting_hbp`, `team_baserun_cs`, and `team_fielding_dp`. Based on the percentages from `Table 1`, it does not appear that only columns have more than 10% of their observations missing. 
+
+```{r}
+# Sum NAs across columns, divide by length of column and get percent missing NAs per column
+missing_vals <- training_set |>
+  summarise(across(everything(), ~ sum(is.na(.) / length(.)))) |>
+  pivot_longer(cols = where(is.numeric), names_to = "variable")
+
+missing_vals |>
+  filter(value > 0) |>
+  gt::gt() |> 
+  tab_header(
+    title = "Table 1: Percent of observations with missing values"
+  ) |> 
+  cols_label(
+    variable = "Variable",
+    value = "Percent"
+  ) |> 
+  fmt_percent(
+    columns = value,
+    decimals = 2
+  )
+```
+
+{{< pagebreak >}}
+
+
+
+# Appendix
