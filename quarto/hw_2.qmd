@@ -35,7 +35,7 @@ Your objective is to build multiple linear regression and binary logistic regres
 #| output: false
 # Install pacman package and load libraries
 # install.packages("pacman")
-pacman::p_load(tidyverse, here, tidymodels, corrplot, MASS, gt, stargazer)
+pacman::p_load(tidyverse, here, tidymodels, corrplot, MASS, gt, stargazer, vtable, glmnet)
 
 # Makes sure dplyr::filter and dplyr::select will be used
 conflicted::conflict_prefer("select", "dplyr")
@@ -48,7 +48,7 @@ training_set <- readr::read_csv(
   janitor::clean_names()
 ```
 
-First, lets rename the variables to a more readable format. Then, print a summary of the data to get a sense of what datatypes there are. From the table below, we can see we have a few variables where the datatype is wrong. In particular, `Income`, `Bluebook Value`, and `Total Claims` are all character columns rather than numeric. We will convert them. Furthermore, let's convert any binary variables to factors for modelling purposes. 
+First, lets rename the variables to a more readable format. Then, print a summary of the data to get a sense of what datatypes there are. From the table below, we can see we have a few variables where the datatype is wrong. In particular, `Income`, `Bluebook Value`, and `Total Claims` are all character columns rather than numeric. We will convert them. 
 
 ```{r}
 #| echo: false
@@ -92,14 +92,6 @@ training_set <- training_set |>
       .fns = parse_number
     )
   )
-
-training_set <- training_set |> 
-  mutate(
-    across(
-      .cols = c(`Is Red Car`, `Crash Dummy`, `Marital Status`, "Sex"),
-      .fns = as.factor
-    )
-  )
 ```
 
 
@@ -132,6 +124,272 @@ missing_vals |>
 ```
 
 {{< pagebreak >}}
+
+## Visualize
+
+### Summary Plots
+
+Now that we have the data in the proper format, let's produce some charts to get a sense of the shape and distribution of the data itself. First, we want to investigate the distribution of the regressand, `Crash Dummy`. From the bar chart, we can so the amount of observations where there wasn't a crash was almost three times more than there being a crash. 
+
+```{r}
+#| warning: false
+vars <- training_set |>
+  # select(-index) |>
+  names() |>
+  set_names()
+
+plots <- map(vars, ~ ggplot(data = training_set) +
+  geom_point(aes(x = .data[[.x]], y = "Crash Dummy")) +
+  theme_minimal() +
+  labs(y = .x))
+
+training_set |> 
+  ggplot(aes(`Crash Dummy`)) +
+  geom_bar() +
+  labs(
+    title = "Observations of Crash Dummy Variable",
+    caption = "0 = No Crash, 1 = Crash"
+  ) +
+  theme_minimal()
+```
+
+
+## Summary Statistics
+
+Let's produce a summary table of the `mean`, `standard deviation`, `median` and maximum and minimum values of the dataset, then move towards transformations of the variables. From the data in `Table 2`, we can see that the for the following key varibes: mean `Crash Damage` was 1,504 dollars, mean `Age of Driver` was 44, and mean `Bluebook Value` was $15,709. 
+
+```{r}
+#| echo: false
+#| warning: false
+vtable::sumtable(
+  training_set,
+  vars = c(
+    "Teen Drivers",
+    "Age of Driver",
+    "Kids at Home",
+    "Years on Job",
+    "Income",
+    "Home Value",
+    "Distance to Work",
+    "Bluebook Value",
+    "Time as Customer",
+    "Total Claims",
+    "Claim Frequency",
+    "Licences Record Points",
+    "Car Age"
+  ),
+  summ = c("mean(x)",
+           "median(x)",
+           "sd(x)",
+           "max(x)",
+           "min(x)")
+)
+```
+
+{{< pagebreak >}}
+
+# Data preparation
+
+## Log Transformation
+
+Let's check the distribution of a few key numeric variables, then take the log transformation if necessary. From the below four plots, the most heavily right-skewed variables are `Crash Damage` and `Total Claims`. These two variables will be log-transformed, which will be incldued in the appendix.
+
+```{r}
+#| echo: false
+#| warning: false
+training_set |> 
+  ggplot(aes(`Income`)) +
+  geom_histogram() +
+  theme_minimal() +
+  labs(
+    title = "Histogram of Income"
+  )
+```
+
+```{r}
+#| echo: false
+#| warning: false
+training_set |> 
+  ggplot(aes(`Bluebook Value`)) +
+  geom_histogram() +
+  theme_minimal() +
+  labs(
+    title = "Histogram of Bluebook Value"
+  )
+```
+
+```{r}
+#| echo: false
+#| warning: false
+training_set |> 
+  ggplot(aes(`Total Claims`)) +
+  geom_histogram() +
+  theme_minimal() +
+  labs(
+    title = "Histogram of Total Claims"
+  )
+```
+
+```{r}
+#| include: false
+training_set |> 
+  mutate(across(
+    .cols = c(
+      `Total Claims`, `Crash Damage`
+    ),
+    .fns = log
+  ))
+```
+
+# Build Models
+
+## Model 1
+
+For the first model, we will use a full model with all predictors, then in the following models perform some analysis to either remove variables, or keep it as is. Will we return the model summary tab, then check for multicollinearity by the `vif` function. The two variables with a variance inflation factor above 10 are: `Education` and `Job`. This is not surprising, given the strong positive correlation between education and earnings. 
+
+```{r}
+#| warning: false
+#| echo: false
+## First model: Use all variables
+lm_fit_1 <- lm(as.numeric(`Crash Dummy`) ~ . -index - `Crash Damage`, data = training_set)
+summary(lm_fit_1)
+
+print(paste0("The mean squared error is: ", mean(lm_fit_1$residuals^2)))
+```
+
+```{r}
+#| include: false
+lm_fit_1_vif <- car::vif(lm_fit_1)
+as.data.frame(lm_fit_1_vif)
+```
+
+Let's check the residuals vs. fitted plot.
+
+```{r}
+par(mfrow=c(2, 2))
+plot(lm_fit_1)
+```
+
+### Coefficient Interpretation
+
+For this first model, interpretation of the coefficients is based on the linear probability model. The formula definition is as follows: $\Delta P(y = 1 |x) = \beta_j \Delta x_j$. In words, the model measures the change in the probability of success when $x_j$ changes, holding all other factors fixed. 
+
+- `Distance to work`: Another 1 mile increase in distance to work increases the probability of a crash by .002175. This makes sense, since the longer a commute, the higher change of a crash due to driving time. 
+
+- `Age of Driver`: Another 1 year increase in age reduces the probability of a crash by .0006564. This makese sense, since older drivers have more experience. 
+
+As another holisitic check, for key variables `License Record Points`, `Distance to Work`, and `Kids at Home` all having positive coefficients makes sense. 
+
+{{< pagebreak >}}
+
+## Model 2
+
+From the VIF results in `Model 1`, the second model will remove `Education` and `Jobs`. We will double check the VIF results in `Model 2` as well. In the appendix, it is confirmed that no variable in this model has a VIF value above 10.
+
+
+```{r}
+lm_fit_2 <- lm(as.numeric(`Crash Dummy`) ~ . - Education - Job - index - `Crash Damage`, data = training_set)
+summary(lm_fit_2)
+
+print(paste0("The mean squared error is: ", mean(lm_fit_2$residuals^2)))
+```
+
+```{r}
+#| include: false
+lm_fit_2_vif <- car::vif(lm_fit_2)
+as.data.frame(lm_fit_2_vif)
+```
+
+Let's check the residuals vs. fitted plot.
+
+```{r}
+par(mfrow=c(2, 2))
+plot(lm_fit_2)
+```
+
+### Coefficient Interpretation
+
+For the second model, interpretation of the coefficients is based on the linear probability model. The formula definition is as follows: $\Delta P(y = 1 |x) = \beta_j \Delta x_j$. In words, the model measures the change in the probability of success when $x_j$ changes, holding all other factors fixed. 
+
+- `Teenage Drivers`: Another 1 additional teenage driver increases the probability of a crash by .004789. This would seem intuitive, since teen drivers are younger and have less experience operating a vehicle.
+
+- `Age of Driver`: Another 1 year increase in age reduces the probability of a crash by .0006564. This also seems intuitive, since having more experience driving would reduce mistakes due to knowledge of the road.
+
+## Model 3
+
+For the last model, we will relax an assumption about the relationship between the regressors and regressand. The last model will be a probit model with the same predictors in `Model 2`, which has two advantages: The conditional probability function does not have to be linear, and it has the benefits of lower multicollinearity due to removing `Education` and `Jobs`. To accomplish this, we will use lasso regression from the `glmnet` package. 
+
+```{r}
+glm_df <- training_set |> 
+  mutate(
+    across(
+      .cols = c(`Is Red Car`, `Crash Dummy`, `Marital Status`, "Sex", `License Revoked`,
+                `Single Parent`, `Car Type`, "Geography"),
+      .fns = as.factor
+    )
+  ) |> 
+  # select(-index, -"Education", -"Job") |> 
+  na.omit()
+
+x <- model.matrix(`Crash Dummy` ~., glm_df)[, -1]
+y <- glm_df$`Crash Dummy`
+
+glm_fit_3 <- glmnet(x, as.factor(y), family = "binomial")
+par(mfrow=c(1, 1))
+plot(glm_fit_3, xvar = "lambda")
+```
+
+
+## Model Presentation
+
+```{r, results = 'asis'}
+#| echo: false
+stargazer(lm_fit_1, lm_fit_2,
+          title = "Model 1 and 2 Regression Output",
+          column.labels = c("Probability of Crash"),
+          covariate.labels = c(
+            "Teen Drivers",
+            "Age of Driver",
+            "Kids at Home",
+            "Years on Job",
+            "Income",
+            "Is Single Parent",
+            "Home Value",
+            "Not Married",
+            "Female",
+            "Bachelors",
+            "Masters",
+            "PhD",
+            "High School",
+            "Doctor",
+            "Home Maker",
+            "Lawyer",
+            "Manager",
+            "Professional",
+            "Student",
+            "Blue Collar",
+            "Distance to Work",
+            "Private Car",
+            "Vehichle Bluebook Value",
+            "Time as Customer",
+            "Panel Truck",
+            "Pickup",
+            "Sports Car",
+            "Van",
+            "SUV",
+            "Red Car",
+            "Total Claims",
+            "Frequency of Claims",
+            "Revoked License",
+            "License Record Points",
+            "Car Age",
+            "Rural Area",
+            "Constant"),
+          type = "latex")
+```
+
+
+# Select Models
 
 
 
